@@ -32,6 +32,7 @@ USE OR OTHER DEALINGS IN THE SOFTWARE.
 from openmmml.mlpotential import MLPotential, MLPotentialImpl, MLPotentialImplFactory
 import openmm
 from typing import Iterable, Optional, Union
+import torch 
 
 class ANIPotentialImplFactory(MLPotentialImplFactory):
     """This is the factory that creates ANIPotentialImpl objects."""
@@ -108,11 +109,26 @@ class ANIPotentialImpl(MLPotentialImpl):
 
         class ANIForce(torch.nn.Module):
 
-            def __init__(self, model, species, atoms, periodic):
+            def __init__(self, model, species, atoms, periodic,lambda_value, t1_indices, t2_indices):
                 super(ANIForce, self).__init__()
                 self.model = model
                 self.species = torch.nn.Parameter(species, requires_grad=False)
+
+                mask = torch.nn.Parameter(t1_indices, requires_grad = False)
+                t2_species = torch.nn.Parameter(
+                    species.clone().detach(), requires_grad=False
+                )
+                t2_species[:, mask] = -1 
+
+                mask = torch.nn.Parameter(t2_indices, requires_grad = False)
+                t1_species = torch.nn.Parameter(
+                    species.clone().detach(), requires_grad=False
+                )
+                t1_species[:, mask] = -1
+
                 self.energyScale = torchani.units.hartree2kjoulemol(1)
+                self.lambda_value = lambda_value
+                
                 if atoms is None:
                     self.indices = None
                 else:
@@ -127,17 +143,30 @@ class ANIPotentialImpl(MLPotentialImpl):
                 #print(f"(boxvectors, scale): {boxvectors, scale}")
                 if self.indices is not None:
                     positions = positions[self.indices]
+
+                species_positions_tuple = (
+                    torch.stack(
+                        (self.t1_species, self.t2_species)
+                    ).squeeze(),
+                    10.0 * positions.repeat(2, 1).reshape(2, -1, 3),
+                )   
+
                 if boxvectors is None:
-                    _, energy = self.model((self.species, 10.0*positions.unsqueeze(0)))
+                    _, energy = self.model(species_positions_tuple)
                 else:
                     boxvectors = boxvectors.to(torch.float32)
-                    _, energy = self.model((self.species, 10.0*positions.unsqueeze(0)), cell=10.0*boxvectors, pbc=self.pbc)
+                    _, energy = self.model(self.species, species_positions_tuple, cell=10.0*boxvectors, pbc=self.pbc)
 
-                return self.energyScale*energy
+                t1 = energy[0]
+                t2 = energy[1]
+
+                return self.energyScale * (
+                    (self.lambda_value * t1) + ((1-self.lambda_value) * t2)
+                )
 
         # is_periodic...
         is_periodic = (topology.getPeriodicBoxVectors() is not None) or system.usesPeriodicBoundaryConditions()
-        aniForce = ANIForce(model, species, atoms, is_periodic)
+        aniForce = ANIForce(model, species, atoms, is_periodic, self.lambda_val, self.t1_indices, self.t2_indices)
 
         # Convert it to TorchScript and save it.
 
