@@ -33,10 +33,17 @@ from openmmml.mlpotential import MLPotential, MLPotentialImpl, MLPotentialImplFa
 import openmm
 from typing import Iterable, Optional, Union
 
+
 class ANIPotentialImplFactory(MLPotentialImplFactory):
     """This is the factory that creates ANIPotentialImpl objects."""
 
     def createImpl(self, name: str, **args) -> MLPotentialImpl:
+        if name.startswith("tau"):
+            self.lambda_val = args["lambda_val"]
+            self.t1_indices = args["t1_indices"]
+            self.t2_indices = args["t2_indices"]
+            name = "ani2x"
+            return TautANIPotentialImpl(name)
         return ANIPotentialImpl(name)
 
 
@@ -63,16 +70,17 @@ class ANIPotentialImpl(MLPotentialImpl):
     def __init__(self, name):
         self.name = name
 
-
-    def addForces(self,
-                  topology: openmm.app.Topology,
-                  system: openmm.System,
-                  atoms: Optional[Iterable[int]],
-                  forceGroup: int,
-                  filename: str = 'animodel.pt',
-                  implementation: str = 'nnpops',
-                  modelIndex: Optional[int] = None,
-                  **args):
+    def addForces(
+        self,
+        topology: openmm.app.Topology,
+        system: openmm.System,
+        atoms: Optional[Iterable[int]],
+        forceGroup: int,
+        filename: str = "animodel.pt",
+        implementation: str = "nnpops",
+        modelIndex: Optional[int] = None,
+        **args,
+    ):
         # Create the TorchANI model.
 
         import torchani
@@ -80,13 +88,13 @@ class ANIPotentialImpl(MLPotentialImpl):
         import openmmtorch
 
         # `nnpops` throws error if `periodic_table_index`=False if one passes `species` as `species_to_tensor` from `element`
-        _kwarg_dict = {'periodic_table_index': True}
-        if self.name == 'ani1ccx':
+        _kwarg_dict = {"periodic_table_index": True}
+        if self.name == "ani1ccx":
             model = torchani.models.ANI1ccx(**_kwarg_dict)
-        elif self.name == 'ani2x':
+        elif self.name == "ani2x":
             model = torchani.models.ANI2x(**_kwarg_dict)
         else:
-            raise ValueError('Unsupported ANI model: '+self.name)
+            raise ValueError("Unsupported ANI model: " + self.name)
         if modelIndex is not None:
             model = model[modelIndex]
 
@@ -95,19 +103,21 @@ class ANIPotentialImpl(MLPotentialImpl):
         if atoms is not None:
             includedAtoms = [includedAtoms[i] for i in atoms]
         species = torch.tensor([[atom.element.atomic_number for atom in includedAtoms]])
-        if implementation == 'nnpops':
+        if implementation == "nnpops":
             try:
                 from NNPOps import OptimizedTorchANI
+
                 model = OptimizedTorchANI(model, species)
             except Exception as e:
                 print(f"failed to equip `nnpops` with error: {e}")
         elif implementation == "torchani":
-            pass # do nothing
+            pass  # do nothing
         else:
-            raise NotImplementedError(f"implementation {implementation} is not supported")
+            raise NotImplementedError(
+                f"implementation {implementation} is not supported"
+            )
 
         class ANIForce(torch.nn.Module):
-
             def __init__(self, model, species, atoms, periodic):
                 super(ANIForce, self).__init__()
                 self.model = model
@@ -118,25 +128,36 @@ class ANIPotentialImpl(MLPotentialImpl):
                 else:
                     self.indices = torch.tensor(sorted(atoms), dtype=torch.int64)
                 if periodic:
-                    self.pbc = torch.nn.Parameter(torch.tensor([True, True, True], dtype=torch.bool), requires_grad=False)
+                    self.pbc = torch.nn.Parameter(
+                        torch.tensor([True, True, True], dtype=torch.bool),
+                        requires_grad=False,
+                    )
                 else:
                     self.pbc = None
 
             def forward(self, positions, boxvectors: Optional[torch.Tensor] = None):
                 positions = positions.to(torch.float32)
-                #print(f"(boxvectors, scale): {boxvectors, scale}")
+                # print(f"(boxvectors, scale): {boxvectors, scale}")
                 if self.indices is not None:
                     positions = positions[self.indices]
                 if boxvectors is None:
-                    _, energy = self.model((self.species, 10.0*positions.unsqueeze(0)))
+                    _, energy = self.model(
+                        (self.species, 10.0 * positions.unsqueeze(0))
+                    )
                 else:
                     boxvectors = boxvectors.to(torch.float32)
-                    _, energy = self.model((self.species, 10.0*positions.unsqueeze(0)), cell=10.0*boxvectors, pbc=self.pbc)
+                    _, energy = self.model(
+                        (self.species, 10.0 * positions.unsqueeze(0)),
+                        cell=10.0 * boxvectors,
+                        pbc=self.pbc,
+                    )
 
-                return self.energyScale*energy
+                return self.energyScale * energy
 
         # is_periodic...
-        is_periodic = (topology.getPeriodicBoxVectors() is not None) or system.usesPeriodicBoundaryConditions()
+        is_periodic = (
+            topology.getPeriodicBoxVectors() is not None
+        ) or system.usesPeriodicBoundaryConditions()
         aniForce = ANIForce(model, species, atoms, is_periodic)
 
         # Convert it to TorchScript and save it.
@@ -150,6 +171,7 @@ class ANIPotentialImpl(MLPotentialImpl):
         force.setForceGroup(forceGroup)
         force.setUsesPeriodicBoundaryConditions(is_periodic)
         system.addForce(force)
+
 
 class TautANIPotentialImpl(MLPotentialImpl):
     """This is the MLPotentialImpl implementing the ANI potential.
@@ -174,16 +196,17 @@ class TautANIPotentialImpl(MLPotentialImpl):
     def __init__(self, name):
         self.name = name
 
-
-    def addForces(self,
-                  topology: openmm.app.Topology,
-                  system: openmm.System,
-                  atoms: Optional[Iterable[int]],
-                  forceGroup: int,
-                  filename: str = 'animodel.pt',
-                  implementation: str = 'nnpops',
-                  modelIndex: Optional[int] = None,
-                  **args):
+    def addForces(
+        self,
+        topology: openmm.app.Topology,
+        system: openmm.System,
+        atoms: Optional[Iterable[int]],
+        forceGroup: int,
+        filename: str = "animodel.pt",
+        implementation: str = "nnpops",
+        modelIndex: Optional[int] = None,
+        **args,
+    ):
         # Create the TorchANI model.
 
         import torchani
@@ -191,13 +214,13 @@ class TautANIPotentialImpl(MLPotentialImpl):
         import openmmtorch
 
         # `nnpops` throws error if `periodic_table_index`=False if one passes `species` as `species_to_tensor` from `element`
-        _kwarg_dict = {'periodic_table_index': True}
-        if self.name == 'ani1ccx':
+        _kwarg_dict = {"periodic_table_index": True}
+        if self.name == "ani1ccx":
             model = torchani.models.ANI1ccx(**_kwarg_dict)
-        elif self.name == 'ani2x':
+        elif self.name == "ani2x":
             model = torchani.models.ANI2x(**_kwarg_dict)
         else:
-            raise ValueError('Unsupported ANI model: '+self.name)
+            raise ValueError("Unsupported ANI model: " + self.name)
         if modelIndex is not None:
             model = model[modelIndex]
 
@@ -206,31 +229,42 @@ class TautANIPotentialImpl(MLPotentialImpl):
         if atoms is not None:
             includedAtoms = [includedAtoms[i] for i in atoms]
         species = torch.tensor([[atom.element.atomic_number for atom in includedAtoms]])
-        if implementation == 'nnpops':
+        if implementation == "nnpops":
             try:
                 from NNPOps import OptimizedTorchANI
+
                 model = OptimizedTorchANI(model, species)
             except Exception as e:
                 print(f"failed to equip `nnpops` with error: {e}")
         elif implementation == "torchani":
-            pass # do nothing
+            pass  # do nothing
         else:
-            raise NotImplementedError(f"implementation {implementation} is not supported")
+            raise NotImplementedError(
+                f"implementation {implementation} is not supported"
+            )
 
         class ANIForce(torch.nn.Module):
-
-            def __init__(self, model, species, atoms, periodic,lambda_value, t1_indices, t2_indices):
+            def __init__(
+                self,
+                model,
+                species,
+                atoms,
+                periodic,
+                lambda_value,
+                t1_indices,
+                t2_indices,
+            ):
                 super(ANIForce, self).__init__()
                 self.model = model
                 self.species = torch.nn.Parameter(species, requires_grad=False)
 
-                mask = torch.nn.Parameter(t1_indices, requires_grad = False)
+                mask = torch.nn.Parameter(t1_indices, requires_grad=False)
                 t2_species = torch.nn.Parameter(
                     species.clone().detach(), requires_grad=False
                 )
-                t2_species[:, mask] = -1 
+                t2_species[:, mask] = -1
 
-                mask = torch.nn.Parameter(t2_indices, requires_grad = False)
+                mask = torch.nn.Parameter(t2_indices, requires_grad=False)
                 t1_species = torch.nn.Parameter(
                     species.clone().detach(), requires_grad=False
                 )
@@ -238,45 +272,61 @@ class TautANIPotentialImpl(MLPotentialImpl):
 
                 self.energyScale = torchani.units.hartree2kjoulemol(1)
                 self.lambda_value = lambda_value
-                
+
                 if atoms is None:
                     self.indices = None
                 else:
                     self.indices = torch.tensor(sorted(atoms), dtype=torch.int64)
                 if periodic:
-                    self.pbc = torch.nn.Parameter(torch.tensor([True, True, True], dtype=torch.bool), requires_grad=False)
+                    self.pbc = torch.nn.Parameter(
+                        torch.tensor([True, True, True], dtype=torch.bool),
+                        requires_grad=False,
+                    )
                 else:
                     self.pbc = None
 
             def forward(self, positions, boxvectors: Optional[torch.Tensor] = None):
                 positions = positions.to(torch.float32)
-                #print(f"(boxvectors, scale): {boxvectors, scale}")
+                # print(f"(boxvectors, scale): {boxvectors, scale}")
                 if self.indices is not None:
                     positions = positions[self.indices]
 
                 species_positions_tuple = (
-                    torch.stack(
-                        (self.t1_species, self.t2_species)
-                    ).squeeze(),
+                    torch.stack((self.t1_species, self.t2_species)).squeeze(),
                     10.0 * positions.repeat(2, 1).reshape(2, -1, 3),
-                )   
+                )
 
                 if boxvectors is None:
                     _, energy = self.model(species_positions_tuple)
                 else:
                     boxvectors = boxvectors.to(torch.float32)
-                    _, energy = self.model(self.species, species_positions_tuple, cell=10.0*boxvectors, pbc=self.pbc)
+                    _, energy = self.model(
+                        self.species,
+                        species_positions_tuple,
+                        cell=10.0 * boxvectors,
+                        pbc=self.pbc,
+                    )
 
                 t1 = energy[0]
                 t2 = energy[1]
 
                 return self.energyScale * (
-                    (self.lambda_value * t1) + ((1-self.lambda_value) * t2)
+                    (self.lambda_value * t1) + ((1 - self.lambda_value) * t2)
                 )
 
         # is_periodic...
-        is_periodic = (topology.getPeriodicBoxVectors() is not None) or system.usesPeriodicBoundaryConditions()
-        aniForce = ANIForce(model, species, atoms, is_periodic, self.lambda_val, self.t1_indices, self.t2_indices)
+        is_periodic = (
+            topology.getPeriodicBoxVectors() is not None
+        ) or system.usesPeriodicBoundaryConditions()
+        aniForce = ANIForce(
+            model,
+            species,
+            atoms,
+            is_periodic,
+            self.lambda_val,
+            self.t1_indices,
+            self.t2_indices,
+        )
 
         # Convert it to TorchScript and save it.
 
@@ -290,6 +340,7 @@ class TautANIPotentialImpl(MLPotentialImpl):
         force.setUsesPeriodicBoundaryConditions(is_periodic)
         system.addForce(force)
 
-MLPotential.registerImplFactory('ani1ccx', ANIPotentialImplFactory())
-MLPotential.registerImplFactory('ani2x', ANIPotentialImplFactory())
-MLPotential.registerImplFactory('tautani2x', ANIPotentialImplFactory())
+
+MLPotential.registerImplFactory("ani1ccx", ANIPotentialImplFactory())
+MLPotential.registerImplFactory("ani2x", ANIPotentialImplFactory())
+MLPotential.registerImplFactory("tautani2x", ANIPotentialImplFactory())
