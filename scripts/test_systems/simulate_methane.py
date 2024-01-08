@@ -60,20 +60,17 @@ def get_indices(tautomer: str, ligand_topology,device) :
     indices = indices.bool()
     return indices
 
-t1_indices = get_indices(tautomer="t1", ligand_topology=ligand_topology, device=device)
-t2_indices = get_indices(tautomer="t2", ligand_topology=ligand_topology, device=device)
+t1_idx_mask = get_indices(tautomer="t1", ligand_topology=ligand_topology, device=device)
+t2_idx_mask = get_indices(tautomer="t2", ligand_topology=ligand_topology, device=device)
 
 # set up simulation
 integrator = LangevinIntegrator(temperature, 1 / collision_rate, stepsize)
 platform = Platform.getPlatformByName("CUDA")
-potential = MLPotential('tautani2x', lambda_val = 1, t1_indices=t1_indices, t2_indices=t2_indices)
+potential = MLPotential('tautani2x', lambda_val = 1, t1_idx_mask=t1_idx_mask, t2_idx_mask=t2_idx_mask)
 
 system = potential.createSystem(
     solv_system.getTopology(),
-    implementation = "torchani",
-    #lambda_val = 1.0, 
-    #t1_indices = t1_indices, 
-    #t2_indices = t2_indices
+    implementation = "torchani"
 )
 
 #barostate = MonteCarloBarostat(unit.Quantity(1*unit.atmosphere), temperature)
@@ -109,7 +106,7 @@ sim = Simulation(
                 },)
 
 #base = sys.argv[0]
-state_file = f"test_systems/{sys_name}_statereport_impl.csv"
+state_file = f"test_systems/{sys_name}_statereport.csv"
 print(f"State report saved to: {state_file}")
 
 reporter = StateDataReporter(
@@ -126,7 +123,7 @@ reporter = StateDataReporter(
 )
 sim.reporters.append(reporter)
 
-trajectory_file = f"test_systems/{sys_name}_trajectory_impl.dcd"
+trajectory_file = f"test_systems/{sys_name}_trajectory.dcd"
 print(f"Trajectory saved to: {trajectory_file}")
 
 sim.reporters.append(
