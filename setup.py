@@ -27,7 +27,7 @@ Operating System :: MacOS
 
 
 setup(
-    name='openmmml',
+    name='openmmml-taut',
     author='Peter Eastman',
     description=DOCLINES[0],
     long_description="\n".join(DOCLINES[2:]),
