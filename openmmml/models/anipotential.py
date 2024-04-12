@@ -264,18 +264,18 @@ class TautANIPotentialImpl(MLPotentialImpl):
                 # check which species should be masked
                 mask_t1 = torch.nn.Parameter(t1_idx_mask, requires_grad=False)
                 # first, get all species
-                self.t2_species = torch.nn.Parameter(
-                    species.clone().detach(), requires_grad=False
-                )
-                # mask dummy atom (defining topology of tautomer 2) with -1
-                self.t2_species[:, mask_t1] = -1
-
-                # do the same for tautomer 2
-                mask_t2 = torch.nn.Parameter(t2_idx_mask, requires_grad=False)
                 self.t1_species = torch.nn.Parameter(
                     species.clone().detach(), requires_grad=False
                 )
-                self.t1_species[:, mask_t2] = -1
+                # mask dummy atom (defining topology of tautomer 2) with -1
+                self.t1_species[:, mask_t1] = -1
+
+                # do the same for tautomer 2
+                mask_t2 = torch.nn.Parameter(t2_idx_mask, requires_grad=False)
+                self.t2_species = torch.nn.Parameter(
+                    species.clone().detach(), requires_grad=False
+                )
+                self.t2_species[:, mask_t2] = -1
 
                 self.energyScale = torchani.units.hartree2kjoulemol(1)
                 self.lambda_val = lambda_val
@@ -320,7 +320,7 @@ class TautANIPotentialImpl(MLPotentialImpl):
 
                 # interpolate between potential of tautomer 1 and tautomer 2 with lambda
                 return self.energyScale * (
-                    (self.lambda_val * t1) + ((1 - self.lambda_val) * t2)
+                    (self.lambda_val * t2) + ((1 - self.lambda_val) * t1)
                 )
 
         # is_periodic...
